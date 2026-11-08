@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111827"><title>Playground Sounds AI</title>
-<style>body{margin:0;background:#101827;color:#f6f8ff;font:16px system-ui}main{max-width:760px;margin:auto;padding:16px}h1{font-size:1.5rem}p{color:#b8c7dc}.stage{position:relative;background:#020617;border-radius:16px;overflow:hidden;aspect-ratio:4/3}video,canvas{position:absolute;width:100%;height:100%;object-fit:contain}video{transform:none}canvas{pointer-events:none}button{background:#2563eb;color:white;border:0;border-radius:12px;padding:13px 16px;font-weight:700;margin:5px;cursor:pointer}button:disabled{opacity:.4}.secondary{background:#334155}.status{padding:10px;color:#a9d6ff}.sounds{display:flex;flex-wrap:wrap}small{color:#aab8ce}label{display:block;margin:10px 0}</style></head>
+<style>body{margin:0;background:#101827;color:#f6f8ff;font:16px system-ui}main{max-width:760px;margin:auto;padding:16px}h1{font-size:1.5rem}p{color:#b8c7dc}.stage{position:relative;background:#020617;border-radius:16px;overflow:hidden;aspect-ratio:4/3}video,canvas{position:absolute;width:100%;height:100%;object-fit:contain}video{transform:none}canvas{pointer-events:none}#zoneLayer{position:absolute;inset:0;touch-action:none;pointer-events:none}#zoneLayer.editing{pointer-events:auto;cursor:crosshair}select{background:#334155;color:white;border:1px solid #64748b;border-radius:8px;padding:10px}.zoneItem{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 0;border-bottom:1px solid #334155}.zoneItem button{padding:7px 10px}.zoneItem strong{flex:1}.hint{font-size:.9rem}button{background:#2563eb;color:white;border:0;border-radius:12px;padding:13px 16px;font-weight:700;margin:5px;cursor:pointer}button:disabled{opacity:.4}.secondary{background:#334155}.status{padding:10px;color:#a9d6ff}.sounds{display:flex;flex-wrap:wrap}small{color:#aab8ce}label{display:block;margin:10px 0}</style></head>
 <body><main><h1>🚛 Playground Sounds AI</h1><p>Point the camera at a playground dashboard. Experimental hand tracking and colourful-control detection trigger playful sounds.</p>
-<div class="stage"><video id="video" autoplay muted playsinline></video><canvas id="overlay"></canvas></div>
+<div class="stage"><video id="video" autoplay muted playsinline></video><canvas id="overlay"></canvas><div id="zoneLayer"></div></div>
 <div class="status" id="status">Ready. Camera access requires HTTPS.</div><div class="status" id="diagnostic">Hands: not started · Frames: 0 · Controls: 0</div>
 <button id="start">Start camera</button><button id="stop" class="secondary" disabled>Stop</button>
-<label><input type="checkbox" id="auto" checked> Enable automatic sounds</label><label><input type="checkbox" id="gesture" checked> Test gesture: pinch thumb and index finger to honk</label>
+<h3>Custom interactive zones</h3><p class="hint">Tap Add zone, then drag a rectangle around a drawing, pencil, toy or anything else. Keep the camera still while playing.</p><div><select id="zoneSound"><option value="horn">📣 Horn</option><option value="engine">🚛 Engine</option><option value="siren">🚨 Siren</option><option value="reverse">↩ Reverse</option></select><button id="addZone" class="secondary">＋ Add zone</button><button id="playZones" class="secondary">▶ Play mode</button><button id="clearZones" class="secondary">Clear zones</button></div><label><input type="checkbox" id="pinchZones"> Custom zones require pinch gesture</label><div id="zoneList"></div><label><input type="checkbox" id="auto" checked> Enable automatic sounds</label><label><input type="checkbox" id="gesture" checked> Test gesture: pinch thumb and index finger to honk</label>
 <h3>Test sounds</h3><div class="sounds"><button data-sound="horn">📣 Horn</button><button data-sound="engine">🚛 Engine</button><button data-sound="siren">🚨 Siren</button><button data-sound="reverse">↩ Reverse</button></div>
 <p><small>Experimental: detecting fingertip proximity to a colourful region does not prove a physical button was pressed. For best results, hold the phone steady. Video stays on your device; the hand-tracking model loads from a CDN.</small></p>
 </main>
@@ -18,7 +18,7 @@ function tone(f,d,type='sawtooth',gain=.12,delay=0){const t=audio.currentTime+de
 function sound(name){audio??=new (window.AudioContext||window.webkitAudioContext)();audio.resume();if(name==='horn'){tone(330,.3);tone(415,.3,'sawtooth',.08)}if(name==='engine'){for(let i=0;i<7;i++)tone(85+i*12,.15,'sawtooth',.09,i*.11)}if(name==='siren'){for(let i=0;i<4;i++){tone(650,.25,'sine',.13,i*.5);tone(900,.25,'sine',.13,i*.5+.25)}}if(name==='reverse'){for(let i=0;i<3;i++)tone(780,.15,'sine',.12,i*.35)}}
 document.querySelectorAll('[data-sound]').forEach(b=>b.onclick=()=>sound(b.dataset.sound));
 const diagnostic=document.getElementById('diagnostic');
-let processed=0,handCount=0,spots=[],lastScan=0,pinchHeld=false,failures=0;
+let processed=0,handCount=0,spots=[],lastScan=0,pinchHeld=false,failures=0;let zones=[],editing=false,dragStart=null,dragNow=null,activeZoneIds=new Set(),nextZoneId=1;const zoneLayer=document.getElementById("zoneLayer"),zoneList=document.getElementById("zoneList");
 const bones=[[0,1,2,3,4],[0,5,6,7,8],[0,9,10,11,12],[0,13,14,15,16],[0,17,18,19,20],[5,9,13,17]];
 function controls(){
   // Connected components of saturated pixels, not arbitrary point clusters.
@@ -35,6 +35,17 @@ function controls(){
   }
   return found.sort((a,b)=>b.n-a.n).slice(0,6);
 }
+function zoneCoords(e){const r=zoneLayer.getBoundingClientRect();const vw=video.videoWidth||4,vh=video.videoHeight||3;const scale=Math.min(r.width/vw,r.height/vh),dw=vw*scale,dh=vh*scale,ox=(r.width-dw)/2,oy=(r.height-dh)/2;return {x:Math.max(0,Math.min(1,(e.clientX-r.left-ox)/dw)),y:Math.max(0,Math.min(1,(e.clientY-r.top-oy)/dh))}}
+function renderZoneList(){zoneList.replaceChildren();zones.forEach(z=>{const line=document.createElement('div');line.className='zoneItem';const label=document.createElement('strong');label.textContent=z.sound.toUpperCase()+' · Zone '+z.id;const test=document.createElement('button');test.className='secondary';test.textContent='Test';test.onclick=()=>sound(z.sound);const del=document.createElement('button');del.className='secondary';del.textContent='Remove';del.onclick=()=>{zones=zones.filter(a=>a.id!==z.id);activeZoneIds.delete(z.id);renderZoneList()};line.append(label,test,del);zoneList.append(line)})}
+function setEditing(value){editing=value;zoneLayer.classList.toggle('editing',value);document.getElementById('addZone').textContent=value?'Cancel drawing':'＋ Add zone';status.textContent=value?'Drag on the camera image to draw a control zone':'Play mode: move your fingertip into a zone'}
+document.getElementById('addZone').onclick=()=>setEditing(!editing);
+document.getElementById('playZones').onclick=()=>setEditing(false);
+document.getElementById('clearZones').onclick=()=>{zones=[];activeZoneIds.clear();renderZoneList()};
+zoneLayer.addEventListener('pointerdown',e=>{if(!editing||!running)return;dragStart=zoneCoords(e);dragNow=dragStart;zoneLayer.setPointerCapture(e.pointerId)});
+zoneLayer.addEventListener('pointermove',e=>{if(dragStart)dragNow=zoneCoords(e)});
+zoneLayer.addEventListener('pointerup',e=>{if(!dragStart)return;dragNow=zoneCoords(e);const x=Math.min(dragStart.x,dragNow.x),y=Math.min(dragStart.y,dragNow.y),w=Math.abs(dragStart.x-dragNow.x),h=Math.abs(dragStart.y-dragNow.y);if(w>.025&&h>.025){zones.push({id:nextZoneId++,x,y,w,h,sound:document.getElementById('zoneSound').value});renderZoneList();status.textContent='Zone added. Tap Play mode to activate it.'}dragStart=null;dragNow=null;setEditing(false)});
+zoneLayer.addEventListener('pointercancel',()=>{dragStart=null;dragNow=null});
+function drawZones(w,h){ctx.lineWidth=Math.max(3,w/280);for(const z of zones){const active=activeZoneIds.has(z.id);ctx.strokeStyle=active?'#4ade80':'#38bdf8';ctx.fillStyle=active?'#4ade8040':'#38bdf822';ctx.fillRect(z.x*w,z.y*h,z.w*w,z.h*h);ctx.strokeRect(z.x*w,z.y*h,z.w*w,z.h*h);ctx.fillStyle='#fff';ctx.font='bold '+Math.max(15,w/52)+'px system-ui';ctx.fillText(z.sound.toUpperCase(),z.x*w+6,z.y*h+Math.max(18,w/52))}if(dragStart&&dragNow){const x=Math.min(dragStart.x,dragNow.x)*w,y=Math.min(dragStart.y,dragNow.y)*h,rw=Math.abs(dragStart.x-dragNow.x)*w,rh=Math.abs(dragStart.y-dragNow.y)*h;ctx.strokeStyle='#fff';ctx.setLineDash([12,8]);ctx.strokeRect(x,y,rw,rh);ctx.setLineDash([])}}
 function onHands(results){
   if(!running)return;
   processed++;failures=0;handCount=(results.multiHandLandmarks||[]).length;
@@ -43,7 +54,7 @@ function onHands(results){
   if(performance.now()-lastScan>450){spots=controls();lastScan=performance.now()}
   ctx.lineWidth=Math.max(2,w/320);
   spots.forEach((p,i)=>{const x=p.x*w,y=p.y*h;ctx.strokeStyle='#facc15';ctx.beginPath();ctx.arc(x,y,Math.max(16,w*.025),0,Math.PI*2);ctx.stroke();ctx.fillStyle='#fff';ctx.font='bold '+Math.max(14,w/55)+'px system-ui';ctx.fillText(['Horn','Engine','Siren','Reverse'][i%4],x+12,y-12)});
-  let near=false,choice='horn',pinched=false;
+  let near=false,choice='horn',pinched=false;const touching=new Set();const pinchRequired=document.getElementById('pinchZones').checked;
   for(const hand of results.multiHandLandmarks||[]){
     ctx.strokeStyle='#34d399';ctx.lineWidth=Math.max(3,w/230);
     for(const chain of bones){ctx.beginPath();chain.forEach((idx,i)=>{const p=hand[idx];if(i===0)ctx.moveTo(p.x*w,p.y*h);else ctx.lineTo(p.x*w,p.y*h)});ctx.stroke()}
@@ -51,15 +62,16 @@ function onHands(results){
     const tip=hand[8],thumb=hand[4],palm=hand[0],knuckle=hand[5];
     const handScale=Math.max(.03,Math.hypot(palm.x-knuckle.x,palm.y-knuckle.y));
     const pinchDistance=Math.hypot(tip.x-thumb.x,tip.y-thumb.y);
-    if(pinchDistance<handScale*.55)pinched=true;
+    const thisPinch=pinchDistance<handScale*.55;if(thisPinch)pinched=true;
     ctx.fillStyle='#f97316';ctx.beginPath();ctx.arc(tip.x*w,tip.y*h,Math.max(7,w/125),0,Math.PI*2);ctx.fill();
+    if(!editing)for(const z of zones){if(tip.x>=z.x&&tip.x<=z.x+z.w&&tip.y>=z.y&&tip.y<=z.y+z.h&&(!pinchRequired||thisPinch))touching.add(z.id)}
     for(let i=0;i<spots.length;i++){const p=spots[i];if(Math.hypot((p.x-tip.x)*w,(p.y-tip.y)*h)<Math.max(25,w*.05)){near=true;choice=['horn','engine','siren','reverse'][i%4]}}
   }
-  const now=Date.now();
+  const now=Date.now();for(const z of zones){if(touching.has(z.id)&&!activeZoneIds.has(z.id)&&now-lastSound>450){sound(z.sound);lastSound=now;status.textContent='Custom zone '+z.id+' triggered: '+z.sound}}activeZoneIds=touching;drawZones(w,h);
   if(document.getElementById('auto').checked&&near&&!previousNear&&now-lastSound>950){sound(choice);lastSound=now}
   if(document.getElementById('gesture').checked&&pinched&&!pinchHeld&&now-lastSound>650){sound('horn');lastSound=now;status.textContent='Pinch detected — horn!'}
   pinchHeld=pinched;previousNear=near;
-  diagnostic.textContent='Hands: '+handCount+' · Frames: '+processed+' · Controls: '+spots.length+(pinched?' · PINCH':'');
+  diagnostic.textContent='Hands: '+handCount+' · Frames: '+processed+' · Controls: '+spots.length+' · Custom zones: '+zones.length+(pinched?' · PINCH':'');
 }
 async function loop(){
  if(!running)return;
