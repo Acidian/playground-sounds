@@ -18,7 +18,7 @@ function tone(f,d,type='sawtooth',gain=.12,delay=0){const t=audio.currentTime+de
 function sound(name){audio??=new (window.AudioContext||window.webkitAudioContext)();audio.resume();if(name==='horn'){tone(330,.3);tone(415,.3,'sawtooth',.08)}if(name==='engine'){for(let i=0;i<7;i++)tone(85+i*12,.15,'sawtooth',.09,i*.11)}if(name==='siren'){for(let i=0;i<4;i++){tone(650,.25,'sine',.13,i*.5);tone(900,.25,'sine',.13,i*.5+.25)}}if(name==='reverse'){for(let i=0;i<3;i++)tone(780,.15,'sine',.12,i*.35)}}
 document.querySelectorAll('[data-sound]').forEach(b=>b.onclick=()=>sound(b.dataset.sound));
 const diagnostic=document.getElementById('diagnostic');
-let processed=0,handCount=0,spots=[],lastScan=0,pinchHeld=false,failures=0,lastDiagnosticUpdate=0,consecutiveZero=0;let zones=[],editing=false,dragStart=null,dragNow=null,activeZoneIds=new Set(),nextZoneId=1;const zoneLayer=document.getElementById("zoneLayer"),zoneList=document.getElementById("zoneList");
+let processed=0,handCount=0,spots=[],lastScan=0,pinchHeld=false,failures=0,lastDiagnosticUpdate=0,consecutiveZero=0;let trackedHand=null,stableFrames=0,rejectedFrames=0;let zones=[],editing=false,dragStart=null,dragNow=null,activeZoneIds=new Set(),nextZoneId=1;const zoneLayer=document.getElementById("zoneLayer"),zoneList=document.getElementById("zoneList");
 const bones=[[0,1,2,3,4],[0,5,6,7,8],[0,9,10,11,12],[0,13,14,15,16],[0,17,18,19,20],[5,9,13,17]];
 function controls(){
   // Connected components of saturated pixels, not arbitrary point clusters.
@@ -46,16 +46,33 @@ zoneLayer.addEventListener('pointermove',e=>{if(dragStart)dragNow=zoneCoords(e)}
 zoneLayer.addEventListener('pointerup',e=>{if(!dragStart)return;dragNow=zoneCoords(e);const x=Math.min(dragStart.x,dragNow.x),y=Math.min(dragStart.y,dragNow.y),w=Math.abs(dragStart.x-dragNow.x),h=Math.abs(dragStart.y-dragNow.y);if(w>.025&&h>.025){zones.push({id:nextZoneId++,x,y,w,h,sound:document.getElementById('zoneSound').value});renderZoneList();status.textContent='Zone added. Tap Play mode to activate it.'}dragStart=null;dragNow=null;setEditing(false)});
 zoneLayer.addEventListener('pointercancel',()=>{dragStart=null;dragNow=null});
 function drawZones(w,h){ctx.lineWidth=Math.max(3,w/280);for(const z of zones){const active=activeZoneIds.has(z.id);ctx.strokeStyle=active?'#4ade80':'#38bdf8';ctx.fillStyle=active?'#4ade8040':'#38bdf822';ctx.fillRect(z.x*w,z.y*h,z.w*w,z.h*h);ctx.strokeRect(z.x*w,z.y*h,z.w*w,z.h*h);ctx.fillStyle='#fff';ctx.font='bold '+Math.max(15,w/52)+'px system-ui';ctx.fillText(z.sound.toUpperCase(),z.x*w+6,z.y*h+Math.max(18,w/52))}if(dragStart&&dragNow){const x=Math.min(dragStart.x,dragNow.x)*w,y=Math.min(dragStart.y,dragNow.y)*h,rw=Math.abs(dragStart.x-dragNow.x)*w,rh=Math.abs(dragStart.y-dragNow.y)*h;ctx.strokeStyle='#fff';ctx.setLineDash([12,8]);ctx.strokeRect(x,y,rw,rh);ctx.setLineDash([])}}
+function stableHands(raw){
+  const candidates=(raw||[]).filter(hand=>{
+    if(!hand||hand.length!==21||hand.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y)||p.x<-.08||p.x>1.08||p.y<-.08||p.y>1.08))return false;
+    const wrist=hand[0],index=hand[5],pinky=hand[17],middle=hand[9];
+    const span=Math.hypot(index.x-pinky.x,index.y-pinky.y),length=Math.hypot(wrist.x-middle.x,wrist.y-middle.y);
+    return span>.025&&length>.035&&span<.8&&length<.9;
+  });
+  if(!candidates.length){stableFrames=0;trackedHand=null;return []}
+  const hand=trackedHand?candidates.reduce((best,h)=>Math.hypot(h[0].x-trackedHand[0].x,h[0].y-trackedHand[0].y)<Math.hypot(best[0].x-trackedHand[0].x,best[0].y-trackedHand[0].y)?h:best,candidates[0]):candidates[0];
+  if(trackedHand){
+    const jump=Math.hypot(hand[0].x-trackedHand[0].x,hand[0].y-trackedHand[0].y);
+    if(jump>.16){rejectedFrames++;stableFrames=0;trackedHand=null;return []}
+    trackedHand=hand.map((p,i)=>({x:trackedHand[i].x*.55+p.x*.45,y:trackedHand[i].y*.55+p.y*.45,z:p.z}));
+  }else trackedHand=hand.map(p=>({...p}));
+  stableFrames++;
+  return stableFrames>=3?[trackedHand]:[];
+}
 function onHands(results){
   if(!running)return;
-  processed++;lastResultAt=performance.now();failures=0;handCount=(results.multiHandLandmarks||[]).length;consecutiveZero=handCount?0:consecutiveZero+1;
+  processed++;lastResultAt=performance.now();failures=0;const acceptedHands=stableHands(results.multiHandLandmarks);handCount=acceptedHands.length;consecutiveZero=handCount?0:consecutiveZero+1;
   const w=video.videoWidth,h=video.videoHeight;if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
   ctx.clearRect(0,0,w,h);
   if(document.getElementById('debugOnly').checked){spots=[]}else if(performance.now()-lastScan>450){try{spots=controls()}catch(e){spots=[];document.getElementById('modelDiagnostic').textContent='Control scan error: '+e.message}lastScan=performance.now()}
   ctx.lineWidth=Math.max(2,w/320);
   spots.forEach((p,i)=>{const x=p.x*w,y=p.y*h;ctx.strokeStyle='#facc15';ctx.beginPath();ctx.arc(x,y,Math.max(16,w*.025),0,Math.PI*2);ctx.stroke();ctx.fillStyle='#fff';ctx.font='bold '+Math.max(14,w/55)+'px system-ui';ctx.fillText(['Horn','Engine','Siren','Reverse'][i%4],x+12,y-12)});
   let near=false,choice='horn',pinched=false;const touching=new Set();const pinchRequired=document.getElementById('pinchZones').checked;
-  for(const hand of results.multiHandLandmarks||[]){
+  for(const hand of acceptedHands){
     ctx.strokeStyle='#34d399';ctx.lineWidth=Math.max(3,w/230);
     for(const chain of bones){ctx.beginPath();chain.forEach((idx,i)=>{const p=hand[idx];if(i===0)ctx.moveTo(p.x*w,p.y*h);else ctx.lineTo(p.x*w,p.y*h)});ctx.stroke()}
     for(const p of hand){ctx.fillStyle='#4ade80';ctx.beginPath();ctx.arc(p.x*w,p.y*h,Math.max(3,w/250),0,Math.PI*2);ctx.fill()}
@@ -71,7 +88,7 @@ function onHands(results){
   if(document.getElementById('auto').checked&&near&&!previousNear&&now-lastSound>950){sound(choice);lastSound=now}
   if(document.getElementById('gesture').checked&&pinched&&!pinchHeld&&now-lastSound>650){sound('horn');lastSound=now;status.textContent='Pinch detected — horn!'}
   pinchHeld=pinched;previousNear=near;
-  if(performance.now()-lastDiagnosticUpdate>350){lastDiagnosticUpdate=performance.now();document.getElementById('modelDiagnostic').textContent='Model: responding · Sent: '+sendCount+' · Results: '+processed+' · Camera: '+cameraFacing+' · Video: '+w+'×'+h;diagnostic.textContent='Hands: '+handCount+' · Consecutive misses: '+consecutiveZero+' · Controls: '+spots.length+' · Custom zones: '+zones.length+(pinched?' · PINCH':'');}
+  if(performance.now()-lastDiagnosticUpdate>350){lastDiagnosticUpdate=performance.now();document.getElementById('modelDiagnostic').textContent='Model: responding · Sent: '+sendCount+' · Results: '+processed+' · Camera: '+cameraFacing+' · Video: '+w+'×'+h;diagnostic.textContent='Hands: '+handCount+' · Stable frames: '+stableFrames+' · Rejected jumps: '+rejectedFrames+' · Misses: '+consecutiveZero+' · Controls: '+spots.length+' · Custom zones: '+zones.length+(pinched?' · PINCH':'');}
 }
 async function loop(){
  if(!running)return;
@@ -97,7 +114,7 @@ async function startCamera(){
   status.textContent='Initializing hand model (may take several seconds)…';
   document.getElementById('modelDiagnostic').textContent='Model: initializing';
   await hands.initialize();
-  modelReady=true;processed=0;sendCount=0;handCount=0;consecutiveZero=0;pinchHeld=false;previousNear=false;locked=false;
+  modelReady=true;processed=0;sendCount=0;handCount=0;consecutiveZero=0;trackedHand=null;stableFrames=0;rejectedFrames=0;pinchHeld=false;previousNear=false;locked=false;
   running=true;start.disabled=true;stop.disabled=false;
   status.textContent='Hand model ready. Hold an open palm in view for 5 seconds. Watch whether Results increases.';
   loop();
@@ -113,5 +130,5 @@ document.getElementById('switchCamera').onclick=async()=>{
  cameraFacing=cameraFacing==='environment'?'user':'environment';
  if(running){stop.onclick();await startCamera()}else status.textContent='Selected '+cameraFacing+' camera. Tap Start camera.';
 };
-stop.onclick=()=>{running=false;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ctx.clearRect(0,0,canvas.width,canvas.height);start.disabled=false;stop.disabled=true;status.textContent='Camera stopped';document.getElementById('modelDiagnostic').textContent='Model: stopped';diagnostic.textContent='Hands: stopped · Frames: '+processed};
+stop.onclick=()=>{running=false;trackedHand=null;stableFrames=0;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ctx.clearRect(0,0,canvas.width,canvas.height);start.disabled=false;stop.disabled=true;status.textContent='Camera stopped';document.getElementById('modelDiagnostic').textContent='Model: stopped';diagnostic.textContent='Hands: stopped · Frames: '+processed};
 </script></body></html>
