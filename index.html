@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111827"><title>Playground Sounds AI</title>
-<style>body{margin:0;background:#101827;color:#f6f8ff;font:16px system-ui}main{max-width:760px;margin:auto;padding:16px}h1{font-size:1.5rem}p{color:#b8c7dc}.stage{position:relative;background:#020617;border-radius:16px;overflow:hidden;aspect-ratio:4/3}video,canvas{position:absolute;width:100%;height:100%;object-fit:contain}video{transform:none}canvas{pointer-events:none}#zoneLayer{position:absolute;inset:0;touch-action:none;pointer-events:none}#zoneLayer.editing{pointer-events:auto;cursor:crosshair}select{background:#334155;color:white;border:1px solid #64748b;border-radius:8px;padding:10px}.zoneItem{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 0;border-bottom:1px solid #334155}.zoneItem button{padding:7px 10px}.zoneItem strong{flex:1}.hint{font-size:.9rem}button{background:#2563eb;color:white;border:0;border-radius:12px;padding:13px 16px;font-weight:700;margin:5px;cursor:pointer}button:disabled{opacity:.4}.secondary{background:#334155}.status{padding:10px;color:#a9d6ff}.sounds{display:flex;flex-wrap:wrap}small{color:#aab8ce}label{display:block;margin:10px 0}</style></head>
+<style>body{margin:0;background:#101827;color:#f6f8ff;font:16px system-ui}main{max-width:760px;margin:auto;padding:16px}h1{font-size:1.5rem}p{color:#b8c7dc}.stage{position:relative;background:#020617;border-radius:16px;overflow:hidden;aspect-ratio:4/3}video,canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}canvas{object-fit:fill}video{transform:none}canvas{pointer-events:none}#zoneLayer{position:absolute;inset:0;touch-action:none;pointer-events:none}#zoneLayer.editing{pointer-events:auto;cursor:crosshair}select{background:#334155;color:white;border:1px solid #64748b;border-radius:8px;padding:10px}.zoneItem{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 0;border-bottom:1px solid #334155}.zoneItem button{padding:7px 10px}.zoneItem strong{flex:1}.hint{font-size:.9rem}button{background:#2563eb;color:white;border:0;border-radius:12px;padding:13px 16px;font-weight:700;margin:5px;cursor:pointer}button:disabled{opacity:.4}.secondary{background:#334155}.status{padding:10px;color:#a9d6ff}.sounds{display:flex;flex-wrap:wrap}small{color:#aab8ce}label{display:block;margin:10px 0}</style></head>
 <body><main><h1>🚛 Playground Sounds AI</h1><p>Point the camera at a playground dashboard. Experimental hand tracking and colourful-control detection trigger playful sounds.</p>
 <div class="stage"><video id="video" autoplay muted playsinline></video><canvas id="overlay"></canvas><div id="zoneLayer"></div></div>
 <div class="status" id="status">Ready. Camera access requires HTTPS.</div><div class="status" id="diagnostic">Hands: not started · Frames: 0 · Controls: 0</div><div class="status" id="modelDiagnostic">Model: not started</div><label><input type="checkbox" id="debugOnly" checked> Hand tracking test mode (skip automatic control detection)</label>
@@ -18,7 +18,7 @@ function tone(f,d,type='sawtooth',gain=.12,delay=0){const t=audio.currentTime+de
 function sound(name){audio??=new (window.AudioContext||window.webkitAudioContext)();audio.resume();if(name==='horn'){tone(330,.3);tone(415,.3,'sawtooth',.08)}if(name==='engine'){for(let i=0;i<7;i++)tone(85+i*12,.15,'sawtooth',.09,i*.11)}if(name==='siren'){for(let i=0;i<4;i++){tone(650,.25,'sine',.13,i*.5);tone(900,.25,'sine',.13,i*.5+.25)}}if(name==='reverse'){for(let i=0;i<3;i++)tone(780,.15,'sine',.12,i*.35)}}
 document.querySelectorAll('[data-sound]').forEach(b=>b.onclick=()=>sound(b.dataset.sound));
 const diagnostic=document.getElementById('diagnostic');
-let processed=0,handCount=0,spots=[],lastScan=0,pinchHeld=false,failures=0;let zones=[],editing=false,dragStart=null,dragNow=null,activeZoneIds=new Set(),nextZoneId=1;const zoneLayer=document.getElementById("zoneLayer"),zoneList=document.getElementById("zoneList");
+let processed=0,handCount=0,spots=[],lastScan=0,pinchHeld=false,failures=0,lastDiagnosticUpdate=0,consecutiveZero=0;let zones=[],editing=false,dragStart=null,dragNow=null,activeZoneIds=new Set(),nextZoneId=1;const zoneLayer=document.getElementById("zoneLayer"),zoneList=document.getElementById("zoneList");
 const bones=[[0,1,2,3,4],[0,5,6,7,8],[0,9,10,11,12],[0,13,14,15,16],[0,17,18,19,20],[5,9,13,17]];
 function controls(){
   // Connected components of saturated pixels, not arbitrary point clusters.
@@ -48,8 +48,8 @@ zoneLayer.addEventListener('pointercancel',()=>{dragStart=null;dragNow=null});
 function drawZones(w,h){ctx.lineWidth=Math.max(3,w/280);for(const z of zones){const active=activeZoneIds.has(z.id);ctx.strokeStyle=active?'#4ade80':'#38bdf8';ctx.fillStyle=active?'#4ade8040':'#38bdf822';ctx.fillRect(z.x*w,z.y*h,z.w*w,z.h*h);ctx.strokeRect(z.x*w,z.y*h,z.w*w,z.h*h);ctx.fillStyle='#fff';ctx.font='bold '+Math.max(15,w/52)+'px system-ui';ctx.fillText(z.sound.toUpperCase(),z.x*w+6,z.y*h+Math.max(18,w/52))}if(dragStart&&dragNow){const x=Math.min(dragStart.x,dragNow.x)*w,y=Math.min(dragStart.y,dragNow.y)*h,rw=Math.abs(dragStart.x-dragNow.x)*w,rh=Math.abs(dragStart.y-dragNow.y)*h;ctx.strokeStyle='#fff';ctx.setLineDash([12,8]);ctx.strokeRect(x,y,rw,rh);ctx.setLineDash([])}}
 function onHands(results){
   if(!running)return;
-  processed++;lastResultAt=performance.now();failures=0;handCount=(results.multiHandLandmarks||[]).length;
-  const w=video.videoWidth,h=video.videoHeight;canvas.width=w;canvas.height=h;
+  processed++;lastResultAt=performance.now();failures=0;handCount=(results.multiHandLandmarks||[]).length;consecutiveZero=handCount?0:consecutiveZero+1;
+  const w=video.videoWidth,h=video.videoHeight;if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
   ctx.clearRect(0,0,w,h);
   if(document.getElementById('debugOnly').checked){spots=[]}else if(performance.now()-lastScan>450){try{spots=controls()}catch(e){spots=[];document.getElementById('modelDiagnostic').textContent='Control scan error: '+e.message}lastScan=performance.now()}
   ctx.lineWidth=Math.max(2,w/320);
@@ -71,7 +71,7 @@ function onHands(results){
   if(document.getElementById('auto').checked&&near&&!previousNear&&now-lastSound>950){sound(choice);lastSound=now}
   if(document.getElementById('gesture').checked&&pinched&&!pinchHeld&&now-lastSound>650){sound('horn');lastSound=now;status.textContent='Pinch detected — horn!'}
   pinchHeld=pinched;previousNear=near;
-  document.getElementById('modelDiagnostic').textContent='Model: responding · Sent: '+sendCount+' · Results: '+processed+' · Camera: '+cameraFacing;diagnostic.textContent='Hands: '+handCount+' · Frames: '+processed+' · Controls: '+spots.length+' · Custom zones: '+zones.length+(pinched?' · PINCH':'');
+  if(performance.now()-lastDiagnosticUpdate>350){lastDiagnosticUpdate=performance.now();document.getElementById('modelDiagnostic').textContent='Model: responding · Sent: '+sendCount+' · Results: '+processed+' · Camera: '+cameraFacing+' · Video: '+w+'×'+h;diagnostic.textContent='Hands: '+handCount+' · Consecutive misses: '+consecutiveZero+' · Controls: '+spots.length+' · Custom zones: '+zones.length+(pinched?' · PINCH':'');}
 }
 async function loop(){
  if(!running)return;
@@ -81,14 +81,14 @@ async function loop(){
   catch(e){failures++;status.textContent='Hand tracking error: '+(e?.message||String(e));diagnostic.textContent='Model error ('+failures+'): '+(e?.message||String(e))}
   finally{locked=false}
  }
- if(running){if(sendCount>5&&processed===0)document.getElementById('modelDiagnostic').textContent='Model: no results received after '+sendCount+' sends';setTimeout(loop,80)}
+ if(running){if(sendCount>5&&processed===0)document.getElementById('modelDiagnostic').textContent='Model: no results received after '+sendCount+' sends';setTimeout(loop,110)}
 }
 async function startCamera(){
  try{
   status.textContent='Opening '+cameraFacing+' camera…';
   document.getElementById('modelDiagnostic').textContent='Model: loading';
   stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:cameraFacing},width:{ideal:640},height:{ideal:480},frameRate:{ideal:24,max:30}}});
-  video.srcObject=stream;await video.play();
+  video.srcObject=stream;await video.play();await new Promise(resolve=>{if(video.videoWidth&&video.videoHeight)return resolve();video.addEventListener('loadedmetadata',resolve,{once:true})});canvas.width=video.videoWidth;canvas.height=video.videoHeight;document.querySelector('.stage').style.aspectRatio=video.videoWidth+' / '+video.videoHeight;
   if(typeof Hands!=='function')throw Error('MediaPipe library unavailable. Check internet access.');
   if(hands){try{await hands.close()}catch(e){}}
   hands=new Hands({locateFile:file=>'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/'+file});
@@ -97,9 +97,9 @@ async function startCamera(){
   status.textContent='Initializing hand model (may take several seconds)…';
   document.getElementById('modelDiagnostic').textContent='Model: initializing';
   await hands.initialize();
-  modelReady=true;processed=0;sendCount=0;handCount=0;pinchHeld=false;previousNear=false;locked=false;
+  modelReady=true;processed=0;sendCount=0;handCount=0;consecutiveZero=0;pinchHeld=false;previousNear=false;locked=false;
   running=true;start.disabled=true;stop.disabled=false;
-  status.textContent='Hand model ready. Hold an open palm in the camera view.';
+  status.textContent='Hand model ready. Hold an open palm in view for 5 seconds. Watch whether Results increases.';
   loop();
  }catch(e){
   running=false;modelReady=false;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;
