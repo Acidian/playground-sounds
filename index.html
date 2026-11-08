@@ -1,15 +1,15 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111827"><title>Playground Sounds AI</title>
-<style>body{margin:0;background:#101827;color:#f6f8ff;font:16px system-ui}main{max-width:760px;margin:auto;padding:16px}h1{font-size:1.5rem}p{color:#b8c7dc}.stage{position:relative;background:#020617;border-radius:16px;overflow:hidden;aspect-ratio:4/3}video,canvas{position:absolute;width:100%;height:100%;object-fit:contain}video{transform:scaleX(-1)}canvas{pointer-events:none}button{background:#2563eb;color:white;border:0;border-radius:12px;padding:13px 16px;font-weight:700;margin:5px;cursor:pointer}button:disabled{opacity:.4}.secondary{background:#334155}.status{padding:10px;color:#a9d6ff}.sounds{display:flex;flex-wrap:wrap}small{color:#aab8ce}label{display:block;margin:10px 0}</style></head>
+<style>body{margin:0;background:#101827;color:#f6f8ff;font:16px system-ui}main{max-width:760px;margin:auto;padding:16px}h1{font-size:1.5rem}p{color:#b8c7dc}.stage{position:relative;background:#020617;border-radius:16px;overflow:hidden;aspect-ratio:4/3}video,canvas{position:absolute;width:100%;height:100%;object-fit:contain}video{transform:none}canvas{pointer-events:none}button{background:#2563eb;color:white;border:0;border-radius:12px;padding:13px 16px;font-weight:700;margin:5px;cursor:pointer}button:disabled{opacity:.4}.secondary{background:#334155}.status{padding:10px;color:#a9d6ff}.sounds{display:flex;flex-wrap:wrap}small{color:#aab8ce}label{display:block;margin:10px 0}</style></head>
 <body><main><h1>🚛 Playground Sounds AI</h1><p>Point the camera at a playground dashboard. Experimental hand tracking and colourful-control detection trigger playful sounds.</p>
 <div class="stage"><video id="video" autoplay muted playsinline></video><canvas id="overlay"></canvas></div>
-<div class="status" id="status">Ready. Camera access requires HTTPS.</div>
+<div class="status" id="status">Ready. Camera access requires HTTPS.</div><div class="status" id="diagnostic">Hands: not started · Frames: 0 · Controls: 0</div>
 <button id="start">Start camera</button><button id="stop" class="secondary" disabled>Stop</button>
-<label><input type="checkbox" id="auto" checked> Enable automatic sounds</label>
+<label><input type="checkbox" id="auto" checked> Enable automatic sounds</label><label><input type="checkbox" id="gesture" checked> Test gesture: pinch thumb and index finger to honk</label>
 <h3>Test sounds</h3><div class="sounds"><button data-sound="horn">📣 Horn</button><button data-sound="engine">🚛 Engine</button><button data-sound="siren">🚨 Siren</button><button data-sound="reverse">↩ Reverse</button></div>
 <p><small>Experimental: detecting fingertip proximity to a colourful region does not prove a physical button was pressed. For best results, hold the phone steady. Video stays on your device; the hand-tracking model loads from a CDN.</small></p>
 </main>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"></script>
 <script>
 const video=document.getElementById('video'),canvas=document.getElementById('overlay'),ctx=canvas.getContext('2d'),status=document.getElementById('status'),start=document.getElementById('start'),stop=document.getElementById('stop');
 const work=document.createElement('canvas');work.width=160;work.height=120;const wc=work.getContext('2d',{willReadFrequently:true});
@@ -17,11 +17,60 @@ let stream=null,running=false,hands=null,locked=false,lastSound=0,previousNear=f
 function tone(f,d,type='sawtooth',gain=.12,delay=0){const t=audio.currentTime+delay,o=audio.createOscillator(),g=audio.createGain();o.type=type;o.frequency.setValueAtTime(f,t);g.gain.setValueAtTime(.001,t);g.gain.exponentialRampToValueAtTime(gain,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g).connect(audio.destination);o.start(t);o.stop(t+d+.01)}
 function sound(name){audio??=new (window.AudioContext||window.webkitAudioContext)();audio.resume();if(name==='horn'){tone(330,.3);tone(415,.3,'sawtooth',.08)}if(name==='engine'){for(let i=0;i<7;i++)tone(85+i*12,.15,'sawtooth',.09,i*.11)}if(name==='siren'){for(let i=0;i<4;i++){tone(650,.25,'sine',.13,i*.5);tone(900,.25,'sine',.13,i*.5+.25)}}if(name==='reverse'){for(let i=0;i<3;i++)tone(780,.15,'sine',.12,i*.35)}}
 document.querySelectorAll('[data-sound]').forEach(b=>b.onclick=()=>sound(b.dataset.sound));
-function controls(){wc.drawImage(video,0,0,160,120);const data=wc.getImageData(0,0,160,120).data;let pts=[];for(let y=8;y<112;y+=4)for(let x=8;x<152;x+=4){let i=(y*160+x)*4,r=data[i],g=data[i+1],b=data[i+2],max=Math.max(r,g,b),min=Math.min(r,g,b);if(max>85&&max-min>75&&max>min*1.65)pts.push({x:x/160,y:y/120})}let groups=[];for(const p of pts){let group=groups.find(g=>(g.x-p.x)**2+(g.y-p.y)**2<.012);if(group){group.x=(group.x*group.n+p.x)/(group.n+1);group.y=(group.y*group.n+p.y)/(group.n+1);group.n++}else groups.push({...p,n:1})}return groups.filter(g=>g.n>=2).sort((a,b)=>b.n-a.n).slice(0,8)}
-function onHands(results){if(!running)return;canvas.width=video.videoWidth;canvas.height=video.videoHeight;ctx.clearRect(0,0,canvas.width,canvas.height);const spots=controls(),w=canvas.width,h=canvas.height;ctx.lineWidth=3;spots.forEach((p,i)=>{let x=(1-p.x)*w,y=p.y*h;ctx.strokeStyle='#facc15';ctx.beginPath();ctx.arc(x,y,Math.max(18,w*.04),0,Math.PI*2);ctx.stroke();ctx.fillStyle='#fff';ctx.font='bold 18px system-ui';ctx.fillText(['Horn','Engine','Siren','Reverse'][i%4],x+16,y-12)});
-let near=false,choice='horn';for(const hand of results.multiHandLandmarks||[]){const tip=hand[8],x=(1-tip.x)*w,y=tip.y*h;ctx.fillStyle='#22c55e';ctx.beginPath();ctx.arc(x,y,12,0,Math.PI*2);ctx.fill();spots.forEach((p,i)=>{const dx=(1-p.x)*w-x,dy=p.y*h-y;if(Math.hypot(dx,dy)<Math.max(30,w*.065)){near=true;choice=['horn','engine','siren','reverse'][i%4]}})}
-if(near&&!previousNear&&Date.now()-lastSound>850&&document.getElementById('auto').checked){sound(choice);lastSound=Date.now();status.textContent='Detected fingertip near a likely control: '+choice}previousNear=near}
-async function loop(){if(!running)return;if(video.readyState>=2&&!locked){locked=true;try{await hands.send({image:video})}catch(e){status.textContent='Tracking error: '+e.message}finally{locked=false}}if(running)requestAnimationFrame(loop)}
-start.onclick=async()=>{try{status.textContent='Loading camera and hand model…';stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280}}});video.srcObject=stream;await video.play();hands=new Hands({locateFile:f=>'https://cdn.jsdelivr.net/npm/@mediapipe/hands/'+f});hands.setOptions({maxNumHands:2,modelComplexity:0,minDetectionConfidence:.55,minTrackingConfidence:.5});hands.onResults(onHands);running=true;start.disabled=true;stop.disabled=false;status.textContent='Camera running — look for yellow control circles and green fingertips';loop()}catch(e){status.textContent='Unable to start: '+e.message;stream?.getTracks().forEach(t=>t.stop())}};
-stop.onclick=()=>{running=false;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ctx.clearRect(0,0,canvas.width,canvas.height);start.disabled=false;stop.disabled=true;status.textContent='Camera stopped'};
+const diagnostic=document.getElementById('diagnostic');
+let processed=0,handCount=0,spots=[],lastScan=0,pinchHeld=false,failures=0;
+const bones=[[0,1,2,3,4],[0,5,6,7,8],[0,9,10,11,12],[0,13,14,15,16],[0,17,18,19,20],[5,9,13,17]];
+function controls(){
+  // Connected components of saturated pixels, not arbitrary point clusters.
+  const W=160,H=120;wc.drawImage(video,0,0,W,H);const d=wc.getImageData(0,0,W,H).data;
+  const mask=new Uint8Array(W*H),seen=new Uint8Array(W*H);
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){let k=y*W+x,i=k*4,r=d[i],g=d[i+1],b=d[i+2],mx=Math.max(r,g,b),mn=Math.min(r,g,b);if(mx>95&&mx-mn>65&&(mx-mn)/mx>.38)mask[k]=1}
+  let found=[];
+  for(let y=2;y<H-2;y+=2)for(let x=2;x<W-2;x+=2){const seed=y*W+x;if(!mask[seed]||seen[seed])continue;let queue=[seed],head=0,sumX=0,sumY=0,n=0,minX=W,maxX=0,minY=H,maxY=0;seen[seed]=1;
+    while(head<queue.length){let k=queue[head++],px=k%W,py=(k/W)|0;sumX+=px;sumY+=py;n++;minX=Math.min(minX,px);maxX=Math.max(maxX,px);minY=Math.min(minY,py);maxY=Math.max(maxY,py);
+      for(const v of [k-1,k+1,k-W,k+W])if(v>=0&&v<W*H&&!seen[v]&&mask[v]&&Math.abs(v%W-px)<=1){seen[v]=1;queue.push(v)}
+    }
+    const ww=maxX-minX+1,hh=maxY-minY+1,aspect=ww/hh;
+    if(n>=14&&n<1800&&ww>=4&&hh>=4&&aspect>.35&&aspect<2.8&&n/(ww*hh)>.3)found.push({x:sumX/n/W,y:sumY/n/H,n});
+  }
+  return found.sort((a,b)=>b.n-a.n).slice(0,6);
+}
+function onHands(results){
+  if(!running)return;
+  processed++;failures=0;handCount=(results.multiHandLandmarks||[]).length;
+  const w=video.videoWidth,h=video.videoHeight;canvas.width=w;canvas.height=h;
+  ctx.clearRect(0,0,w,h);
+  if(performance.now()-lastScan>450){spots=controls();lastScan=performance.now()}
+  ctx.lineWidth=Math.max(2,w/320);
+  spots.forEach((p,i)=>{const x=p.x*w,y=p.y*h;ctx.strokeStyle='#facc15';ctx.beginPath();ctx.arc(x,y,Math.max(16,w*.025),0,Math.PI*2);ctx.stroke();ctx.fillStyle='#fff';ctx.font='bold '+Math.max(14,w/55)+'px system-ui';ctx.fillText(['Horn','Engine','Siren','Reverse'][i%4],x+12,y-12)});
+  let near=false,choice='horn',pinched=false;
+  for(const hand of results.multiHandLandmarks||[]){
+    ctx.strokeStyle='#34d399';ctx.lineWidth=Math.max(3,w/230);
+    for(const chain of bones){ctx.beginPath();chain.forEach((idx,i)=>{const p=hand[idx];if(i===0)ctx.moveTo(p.x*w,p.y*h);else ctx.lineTo(p.x*w,p.y*h)});ctx.stroke()}
+    for(const p of hand){ctx.fillStyle='#4ade80';ctx.beginPath();ctx.arc(p.x*w,p.y*h,Math.max(3,w/250),0,Math.PI*2);ctx.fill()}
+    const tip=hand[8],thumb=hand[4],palm=hand[0],knuckle=hand[5];
+    const handScale=Math.max(.03,Math.hypot(palm.x-knuckle.x,palm.y-knuckle.y));
+    const pinchDistance=Math.hypot(tip.x-thumb.x,tip.y-thumb.y);
+    if(pinchDistance<handScale*.55)pinched=true;
+    ctx.fillStyle='#f97316';ctx.beginPath();ctx.arc(tip.x*w,tip.y*h,Math.max(7,w/125),0,Math.PI*2);ctx.fill();
+    for(let i=0;i<spots.length;i++){const p=spots[i];if(Math.hypot((p.x-tip.x)*w,(p.y-tip.y)*h)<Math.max(25,w*.05)){near=true;choice=['horn','engine','siren','reverse'][i%4]}}
+  }
+  const now=Date.now();
+  if(document.getElementById('auto').checked&&near&&!previousNear&&now-lastSound>950){sound(choice);lastSound=now}
+  if(document.getElementById('gesture').checked&&pinched&&!pinchHeld&&now-lastSound>650){sound('horn');lastSound=now;status.textContent='Pinch detected — horn!'}
+  pinchHeld=pinched;previousNear=near;
+  diagnostic.textContent='Hands: '+handCount+' · Frames: '+processed+' · Controls: '+spots.length+(pinched?' · PINCH':'');
+}
+async function loop(){
+ if(!running)return;
+ if(video.readyState>=2&&!locked){
+  locked=true;
+  try{await hands.send({image:video})}
+  catch(e){failures++;status.textContent='Hand tracking error: '+(e?.message||String(e));diagnostic.textContent='Model error ('+failures+'): '+(e?.message||String(e))}
+  finally{locked=false}
+ }
+ if(running)setTimeout(loop,45);
+}
+start.onclick=async()=>{try{status.textContent='Loading camera and hand model…';stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280}}});video.srcObject=stream;await video.play();if(typeof Hands!=='function')throw Error('MediaPipe script did not load. Check internet/CDN access.');hands=new Hands({locateFile:f=>'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/'+f});hands.setOptions({maxNumHands:2,modelComplexity:0,minDetectionConfidence:.4,minTrackingConfidence:.4});hands.onResults(onHands);processed=0;handCount=0;pinchHeld=false;previousNear=false;running=true;start.disabled=true;stop.disabled=false;status.textContent='Camera running — show your hand to the camera. Green skeleton = detected. Pinch thumb + index to honk.';loop()}catch(e){status.textContent='Unable to start: '+e.message;stream?.getTracks().forEach(t=>t.stop())}};
+stop.onclick=()=>{running=false;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ctx.clearRect(0,0,canvas.width,canvas.height);start.disabled=false;stop.disabled=true;status.textContent='Camera stopped';diagnostic.textContent='Hands: stopped · Frames: '+processed};
 </script></body></html>
